@@ -101,15 +101,16 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getFile: 
     let total = totalDiv.createEl("span", { cls: "simple-time-tracker-timer-time", text: "0s" });
     totalDiv.createEl("span", { text: "Total" });
 
+    let currentTextDiv = element.createDiv({cls: "simple-time-tracker-timers"});
+    let currentText = currentTextDiv.createEl("span", { text: "sobaka beshenaya" });
+
     if (tracker.entries.length > 0) {
         // add table
         let table = element.createEl("table", { cls: "simple-time-tracker-table" });
-        table.createEl("tr").append(
-            createEl("th", { text: "Segment" }),
-            createEl("th", { text: "Start time" }),
-            createEl("th", { text: "End time" }),
-            createEl("th", { text: "Duration" }),
-            createEl("th"));
+        //table.createEl("tr").append(
+            //createEl("th", { text: "Segment" }),
+            //createEl("th", { text: "Duration" }),
+            //createEl("th"));
 
         for (let entry of orderedEntries(tracker.entries, settings))
             addEditableTableRow(tracker, entry, table, newSegmentNameBox, running, getFile, getSectionInfo, settings, 0, component);
@@ -125,14 +126,14 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getFile: 
     }
 
 
-    setCountdownValues(tracker, current, total, currentDiv, settings);
+    setCountdownValues(tracker, current, total, currentDiv, settings, currentText);
     let intervalId = window.setInterval(() => {
         // we delete the interval timer when the element is removed
         if (!element.isConnected) {
             window.clearInterval(intervalId);
             return;
         }
-        setCountdownValues(tracker, current, total, currentDiv, settings);
+        setCountdownValues(tracker, current, total, currentDiv, settings, currentText);
     }, 1000);
 }
 
@@ -156,6 +157,22 @@ export function isRunning(tracker: Tracker): boolean {
     return !!getRunningEntry(tracker.entries);
 }
 
+export function getTopLevelRunningEntry(entries: Entry[]): Entry {
+    for (let entry of entries)
+    {
+        if (entry.subEntries) {
+            let running = getRunningEntry(entry.subEntries);
+            if (running)
+                return entry;
+        } else {
+            // if this entry has no sub entries and no end time, it's running
+            if (!entry.endTime)
+                return entry;
+        }
+    }
+    return null;
+}
+
 export function getRunningEntry(entries: Entry[]): Entry {
     for (let entry of entries) {
         // if this entry has sub entries, check if one of them is running
@@ -173,21 +190,21 @@ export function getRunningEntry(entries: Entry[]): Entry {
 }
 
 export function createMarkdownTable(tracker: Tracker, settings: SimpleTimeTrackerSettings): string {
-    let table = [["Segment", "Start time", "End time", "Duration"]];
+    let table = [["Segment", "Duration"]];
     for (let entry of orderedEntries(tracker.entries, settings))
         table.push(...createTableSection(entry, settings));
-    table.push(["**Total**", "", "", `**${formatDuration(getTotalDuration(tracker.entries), settings)}**`]);
+    table.push(["**Total**", `**${formatDuration(getTotalDuration(tracker.entries), settings)}**`]);
 
     let ret = "";
     // calculate the width every column needs to look neat when monospaced
-    let widths = Array.from(Array(4).keys()).map(i => Math.max(...table.map(a => a[i].length)));
+    let widths = Array.from(Array(2).keys()).map(i => Math.max(...table.map(a => a[i].length)));
     for (let r = 0; r < table.length; r++) {
         // add separators after first row
         if (r == 1)
-            ret += "| " + Array.from(Array(4).keys()).map(i => "-".repeat(widths[i])).join(" | ") + " |\n";
+            ret += "| " + Array.from(Array(2).keys()).map(i => "-".repeat(widths[i])).join(" | ") + " |\n";
 
         let row: string[] = [];
-        for (let i = 0; i < 4; i++)
+        for (let i = 0; i < 2; i++)
             row.push(table[r][i].padEnd(widths[i], " "));
         ret += "| " + row.join(" | ") + " |\n";
     }
@@ -289,12 +306,14 @@ function removeEntry(entries: Entry[], toRemove: Entry): boolean {
     return false;
 }
 
-function setCountdownValues(tracker: Tracker, current: HTMLElement, total: HTMLElement, currentDiv: HTMLDivElement, settings: SimpleTimeTrackerSettings): void {
-    let running = getRunningEntry(tracker.entries);
+function setCountdownValues(tracker: Tracker, current: HTMLElement, total: HTMLElement, currentDiv: HTMLDivElement, settings: SimpleTimeTrackerSettings, currentText: HTMLElement): void {
+    let running = getTopLevelRunningEntry(tracker.entries);
     if (running && !running.endTime) {
         current.setText(formatDuration(getDuration(running), settings));
+        currentText.setText(running.name);
         currentDiv.hidden = false;
     } else {
+        currentText.setText("");
         currentDiv.hidden = true;
     }
     total.setText(formatDuration(getTotalDuration(tracker.entries), settings));
@@ -329,8 +348,6 @@ function updateLegacyInfo(entries: Entry[]): void {
 function createTableSection(entry: Entry, settings: SimpleTimeTrackerSettings): string[][] {
     let ret = [[
         entry.name,
-        entry.startTime ? formatTimestamp(entry.startTime, settings) : "",
-        entry.endTime ? formatTimestamp(entry.endTime, settings) : "",
         entry.endTime || entry.subEntries ? formatDuration(getDuration(entry), settings) : ""]];
     if (entry.subEntries) {
         for (let sub of orderedEntries(entry.subEntries, settings))
@@ -343,28 +360,6 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
     let entryRunning = getRunningEntry(tracker.entries) == entry;
     let row = table.createEl("tr");
 
-    let nameField = new EditableField(row, indent, entry.name);
-    let startField = new EditableTimestampField(row, (entry.startTime), settings);
-    let endField = new EditableTimestampField(row, (entry.endTime), settings);
-
-    row.createEl("td", { text: entry.endTime || entry.subEntries ? formatDuration(getDuration(entry), settings) : "" });
-
-    renderNameAsMarkdown(nameField.label, getFile, component);
-
-    let expandButton = new ButtonComponent(nameField.label)
-        .setClass("clickable-icon")
-        .setClass("simple-time-tracker-expand-button")
-        .setIcon(`chevron-${entry.collapsed ? "left" : "down"}`)
-        .onClick(async () => {
-            if (entry.collapsed) {
-                entry.collapsed = undefined;
-            } else {
-                entry.collapsed = true;
-            }
-            await saveTracker(tracker, getFile(), getSectionInfo());
-        });
-    if (!entry.subEntries)
-        expandButton.buttonEl.style.visibility = "hidden";
 
     let entryButtons = row.createEl("td");
     entryButtons.addClass("simple-time-tracker-table-buttons");
@@ -385,12 +380,12 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
             if (nameField.editing()) {
                 entry.name = nameField.endEdit();
                 expandButton.buttonEl.style.display = null;
-                startField.endEdit();
-                entry.startTime = startField.getTimestamp();
-                if (!entryRunning) {
-                    endField.endEdit();
-                    entry.endTime = endField.getTimestamp();
-                }
+                //startField.endEdit();
+                //entry.startTime = startField.getTimestamp();
+                //if (!entryRunning) {
+                    //endField.endEdit();
+                    //entry.endTime = endField.getTimestamp();
+                //}
                 await saveTracker(tracker, getFile(), getSectionInfo());
                 editButton.setIcon("lucide-pencil");
 
@@ -399,11 +394,11 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
                 nameField.beginEdit(entry.name);
                 expandButton.buttonEl.style.display = "none";
                 // only allow editing start and end times if we don't have sub entries
-                if (!entry.subEntries) {
-                    startField.beginEdit(entry.startTime);
-                    if (!entryRunning)
-                        endField.beginEdit(entry.endTime);
-                }
+                //if (!entry.subEntries) {
+                    //startField.beginEdit(entry.startTime);
+                    //if (!entryRunning)
+                        //endField.beginEdit(entry.endTime);
+                //}
                 editButton.setIcon("lucide-check");
             }
         });
@@ -423,6 +418,28 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
             removeEntry(tracker.entries, entry);
             await saveTracker(tracker, getFile(), getSectionInfo());
         });
+
+    let durationEl = row.createEl("td", { text: entry.endTime || entry.subEntries ? formatDuration(getDuration(entry), settings) : "" });
+    durationEl.addClass("simple-time-tracker-td-auto");
+
+    let nameField = new EditableField(row, indent, entry.name);
+
+    renderNameAsMarkdown(nameField.label, getFile, component);
+
+    let expandButton = new ButtonComponent(nameField.label)
+        .setClass("clickable-icon")
+        .setClass("simple-time-tracker-expand-button")
+        .setIcon(`chevron-${entry.collapsed ? "left" : "down"}`)
+        .onClick(async () => {
+            if (entry.collapsed) {
+                entry.collapsed = undefined;
+            } else {
+                entry.collapsed = true;
+            }
+            await saveTracker(tracker, getFile(), getSectionInfo());
+        });
+    if (!entry.subEntries)
+        expandButton.buttonEl.style.visibility = "hidden";
 
     if (entry.subEntries && !entry.collapsed) {
         for (let sub of orderedEntries(entry.subEntries, settings))
